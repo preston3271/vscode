@@ -1,0 +1,9 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /notes",
+  "rawPath": "/notes",
+  "headers": { "content-type": "application/json" },
+  "requestContext": { "http": { "method": "POST", "path": "/notes" } },
+  "body": "{\"title\": \"My first note\", \"content\": \"Lambda is fun\", \"tags\": [\"learning\"]}",
+  "isBase64Encoded": false
+}

@@ -1,0 +1,8 @@
+{
+  "version": "2.0",
+  "routeKey": "GET /notes",
+  "rawPath": "/notes",
+  "queryStringParameters": { "limit": "5" },
+  "requestContext": { "http": { "method": "GET", "path": "/notes" } },
+  "isBase64Encoded": false
+}

@@ -1,0 +1,12 @@
+{
+  "Records": [
+    {
+      "eventSource": "aws:s3",
+      "eventName": "ObjectCreated:Put",
+      "s3": {
+        "bucket": { "name": "REPLACE-WITH-YOUR-BUCKET" },
+        "object": { "key": "imports/sample.csv", "size": 120, "eTag": "abc123" }
+      }
+    }
+  ]
+}

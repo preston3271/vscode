@@ -1,0 +1,160 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  AWS Lambda beginner guide - a small "notes" service with an HTTP API,
+  an S3-triggered CSV importer and an SQS-driven background worker.
+
+# Settings shared by every function below.
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures: [arm64]       # Graviton: ~20% cheaper than x86_64
+    MemorySize: 256              # MB; CPU scales with memory
+    Timeout: 10                  # seconds (max 900)
+    Tracing: Active              # AWS X-Ray traces
+    LoggingConfig:
+      LogFormat: JSON            # structured logs; logger `extra=` fields become JSON keys
+      ApplicationLogLevel: INFO
+      SystemLogLevel: WARN
+
+Resources:
+  # ---------------------------------------------------------------- Lesson 2
+  HelloFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/hello/
+      Handler: app.lambda_handler   # <file name>.<function name>
+      Environment:
+        Variables:
+          GREETING: Hello
+      Events:
+        HelloApi:
+          Type: HttpApi
+          Properties:
+            Path: /hello
+            Method: GET
+
+  # ---------------------------------------------------------------- Lesson 3
+  NotesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+  NotesApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/notes_api/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NotesTable
+          QUEUE_URL: !Ref WordCountQueue
+      # Least privilege: SAM policy templates expand to scoped IAM statements.
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref NotesTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt WordCountQueue.QueueName
+      Events:
+        CreateNote:
+          Type: HttpApi
+          Properties: { Path: /notes, Method: POST }
+        ListNotes:
+          Type: HttpApi
+          Properties: { Path: /notes, Method: GET }
+        GetNote:
+          Type: HttpApi
+          Properties: { Path: "/notes/{id}", Method: GET }
+        UpdateNote:
+          Type: HttpApi
+          Properties: { Path: "/notes/{id}", Method: PUT }
+        DeleteNote:
+          Type: HttpApi
+          Properties: { Path: "/notes/{id}", Method: DELETE }
+
+  # ---------------------------------------------------------------- Lesson 4
+  ImportBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # Fixed name so the policy below can reference it without a circular
+      # dependency (bucket -> notification -> function -> policy -> bucket).
+      BucketName: !Sub "${AWS::StackName}-imports-${AWS::AccountId}"
+
+  CsvImporterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/csv_importer/
+      Handler: app.lambda_handler
+      Timeout: 60
+      MemorySize: 512
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NotesTable
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref NotesTable
+        - S3ReadPolicy:
+            BucketName: !Sub "${AWS::StackName}-imports-${AWS::AccountId}"
+      Events:
+        CsvUploaded:
+          Type: S3
+          Properties:
+            Bucket: !Ref ImportBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - { Name: prefix, Value: imports/ }
+                  - { Name: suffix, Value: .csv }
+
+  # ---------------------------------------------------------------- Lesson 5
+  WordCountDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600   # 14 days to inspect failures
+
+  WordCountQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 60             # >= 6x the consumer's timeout (AWS guidance)
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt WordCountDLQ.Arn
+        maxReceiveCount: 3              # 3 failed attempts -> DLQ
+
+  WordCountFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/word_count/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NotesTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref NotesTable
+      Events:
+        FromQueue:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt WordCountQueue.Arn
+            BatchSize: 10
+            MaximumBatchingWindowInSeconds: 5
+            FunctionResponseTypes: [ReportBatchItemFailures]
+
+Outputs:
+  ApiUrl:
+    Description: Base URL of the HTTP API
+    Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  ImportBucketName:
+    Description: Upload CSVs to s3://<this>/imports/
+    Value: !Ref ImportBucket
+  NotesTableName:
+    Value: !Ref NotesTable
+  DeadLetterQueueUrl:
+    Value: !Ref WordCountDLQ

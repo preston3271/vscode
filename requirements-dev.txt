@@ -1,0 +1,4 @@
+# Only needed on your machine for tests. Lambda's Python runtime already ships boto3.
+boto3
+moto[dynamodb,s3,sqs]>=5
+pytest
